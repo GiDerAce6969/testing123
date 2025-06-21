@@ -9,7 +9,8 @@ import time
 from datetime import datetime
 import plotly.express as px
 import plotly.graph_objs as go
-from google import genai
+# CORRECTED IMPORT
+import google.generativeai as genai
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import r2_score, mean_absolute_error
