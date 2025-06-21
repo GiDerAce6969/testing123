@@ -20,7 +20,7 @@ plotly
 streamlit
 
 # --- Google Generative AI API ---
-google-generativeai
+google_generativeai
 
 # --- Optional Dependency for Pandas ---
 # Required for reading Excel files (.xlsx)
