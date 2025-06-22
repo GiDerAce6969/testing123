@@ -21,7 +21,7 @@ REQUIRED_COLS = [
     'competitor_ad_spend', 'seasonality_factor', 'repeat_customer_rate', 'campaign_risk'
 ]
 
-# --- Helper Functions (No changes to these) ---
+# --- Helper Functions (No changes here) ---
 @st.cache_data
 def load_raw_data(uploaded_file):
     try:
@@ -71,54 +71,57 @@ def ask_gemini(question, df, api_key):
         if "API key not valid" in str(e): return "The provided Gemini API key is invalid or has expired."
         return f"An error occurred with the Gemini API: {e}."
 
-# --- THIS IS THE CORRECTED OPTIMIZATION FUNCTION ---
-def run_optimization(df, total_budget, total_customers, min_alloc_perc=1, max_alloc_perc=30):
+# --- THIS IS THE ADVANCED, TIERED OPTIMIZATION FUNCTION ---
+def run_optimization(df, total_budget, total_customers, min_alloc_perc=1, tier_caps=None):
     """
-    Performs linear programming with diversification constraints.
-    
-    Args:
-        df (pd.DataFrame): The input dataframe with campaign data.
-        total_budget (float): The total budget to allocate.
-        total_customers (int): The minimum number of customers to reach.
-        min_alloc_perc (int): The minimum percentage of the budget each campaign must receive.
-        max_alloc_perc (int): The maximum percentage of the budget any single campaign can receive.
+    Performs linear programming with tiered diversification constraints.
     """
+    if tier_caps is None:
+        tier_caps = {'Top': 30, 'Middle': 15, 'Bottom': 5}
+        
     df_opt = df.copy()
     num_campaigns = len(df_opt)
     
-    # Define Optimization Potential (Objective Function)
+    # 1. Define and Rank by Optimization Potential
     df_opt['optimization_potential'] = (df_opt['historical_reach'] / (df_opt['ad_spend'] + 1e-6)) * df_opt['engagement_rate'] * df_opt['seasonality_factor']
+    df_opt = df_opt.sort_values('optimization_potential', ascending=False).reset_index(drop=True)
     c = -df_opt['optimization_potential'].values
     
-    # Define Constraints
+    # 2. Assign Tiers
+    top_tier_count = max(1, int(num_campaigns * 0.2)) # Top 20%
+    middle_tier_count = max(1, int(num_campaigns * 0.5)) # Next 50%
+    
+    df_opt['tier'] = 'Bottom'
+    df_opt.loc[:top_tier_count-1, 'tier'] = 'Top'
+    df_opt.loc[top_tier_count:top_tier_count+middle_tier_count-1, 'tier'] = 'Middle'
+    
+    # 3. Define Bounds based on Tiers
+    bounds = []
+    min_budget_per_campaign = (min_alloc_perc / 100) * total_budget / num_campaigns
+    
+    for i, row in df_opt.iterrows():
+        tier = row['tier']
+        max_perc = tier_caps.get(tier, 5) # Default to 5% if tier not found
+        max_budget = (max_perc / 100) * total_budget
+        bounds.append((min_budget_per_campaign, max_budget))
+        
+    # 4. Define Constraints
     reach_per_dollar = (df_opt['historical_reach'] / (df_opt['ad_spend'] + 1e-6)).values
     
-    # Inequality constraints (A_ub * x <= b_ub)
-    # 1. Sum of budgets <= total_budget
-    # 2. -Sum of reach <= -total_customers (to meet minimum reach)
     A_ub = [
-        np.ones(num_campaigns),
-        -reach_per_dollar
+        np.ones(num_campaigns),  # Sum of budgets <= total_budget
+        -reach_per_dollar       # -Sum of reach <= -total_customers
     ]
     b_ub = [
         total_budget,
         -total_customers
     ]
     
-    # Define Bounds for each campaign's budget (x_i)
-    # This is where we enforce diversification
-    min_budget_per_campaign = (min_alloc_perc / 100) * total_budget / num_campaigns
-    max_budget_per_campaign = (max_alloc_perc / 100) * total_budget
-    
-    bounds = [(min_budget_per_campaign, max_budget_per_campaign) for _ in range(num_campaigns)]
-    
-    # Solve the linear program
+    # 5. Solve the linear program
     result = linprog(c, A_ub=A_ub, b_ub=b_ub, bounds=bounds, method='highs')
     
     if result.success:
         allocated_budgets = result.x
-        # If the optimizer allocates less than the total budget (due to constraints),
-        # redistribute the remainder proportionally to the allocation.
         unallocated_budget = total_budget - allocated_budgets.sum()
         if unallocated_budget > 0 and allocated_budgets.sum() > 0:
             proportions = allocated_budgets / allocated_budgets.sum()
@@ -126,11 +129,11 @@ def run_optimization(df, total_budget, total_customers, min_alloc_perc=1, max_al
 
         df_opt['allocated_budget'] = allocated_budgets.round(2)
         df_opt['estimated_reach'] = (df_opt['allocated_budget'] * reach_per_dollar).astype(int)
-        return df_opt.sort_values(by="optimization_potential", ascending=False)
+        return df_opt
     else:
-        st.warning(f"Optimization could not find a solution. This often means the constraints are too tight. Try increasing the budget, decreasing the target customers, or adjusting the allocation percentages. (Message: {result.message})")
+        st.warning(f"Optimization could not find a solution. Constraints might be too tight. Try increasing the budget or adjusting tier caps. (Message: {result.message})")
         return None
-# --- END OF CORRECTED FUNCTION ---
+# --- END OF ADVANCED FUNCTION ---
 
 
 # --- Sidebar ---
@@ -172,6 +175,7 @@ df = st.session_state.df_processed
 if analysis_mode == "Campaign Performance Dashboard":
     # (This section is unchanged)
     st.header("📊 Comprehensive Campaign Performance Dashboard")
+    # ... (code is identical to previous version) ...
     tab1, tab2, tab3, tab4 = st.tabs(["Multi-Dimensional Analysis", "Correlation Insights", "Performance Radar", "Detailed Campaign Metrics"])
     with tab1:
         st.subheader("Campaign Performance Landscape")
@@ -207,7 +211,8 @@ if analysis_mode == "Campaign Performance Dashboard":
         st.dataframe(df.style.highlight_max(subset=['efficiency_score', 'potential_growth'], color='lightgreen', axis=0), use_container_width=True)
         st.download_button("Export Data as CSV", df.to_csv(index=False).encode('utf-8'), "campaign_metrics.csv", "text/csv")
 
-# --- THIS IS THE CORRECTED OPTIMIZATION ENGINE UI ---
+
+# --- THIS IS THE ADVANCED OPTIMIZATION ENGINE UI ---
 elif analysis_mode == "Optimization Engine":
     st.header("⚙️ AI-Powered Optimization Engine")
     
@@ -219,50 +224,47 @@ elif analysis_mode == "Optimization Engine":
             total_customers = st.slider("Minimum Target Customers", 10000, 1000000, 100000, 5000)
         
         st.markdown("---")
-        st.subheader("Diversification Rules")
-        col3, col4 = st.columns(2)
+        st.subheader("Advanced: Tier-Based Allocation Caps (%)")
+        col3, col4, col5 = st.columns(3)
         with col3:
-            min_alloc_perc = st.slider(
-                "Min Allocation per Campaign (%)", 0, 10, 1, 1,
-                help="The minimum percentage of the *average* campaign budget that each campaign must receive. Prevents any campaign from getting $0."
-            )
+            top_cap = st.slider("Top Tier Cap", 10, 50, 30, help="Max % of total budget for the top 20% of campaigns.")
         with col4:
-            max_alloc_perc = st.slider(
-                "Max Allocation Cap per Campaign (%)", 10, 100, 30, 5,
-                help="The maximum percentage of the *total* budget that any single campaign is allowed to receive. Prevents one campaign from taking all the funds."
-            )
-
+            mid_cap = st.slider("Middle Tier Cap", 5, 30, 15, help="Max % of total budget for the middle 50% of campaigns.")
+        with col5:
+            bot_cap = st.slider("Bottom Tier Cap", 1, 10, 5, help="Max % of total budget for the bottom 30% of campaigns.")
+            
     if st.button("🚀 Run AI-Powered Optimization", use_container_width=True):
-        with st.spinner("Running realistic optimization..."):
-            optimized_df = run_optimization(df, total_budget, total_customers, min_alloc_perc, max_alloc_perc)
+        tier_caps = {'Top': top_cap, 'Middle': mid_cap, 'Bottom': bot_cap}
+        with st.spinner("Running tiered optimization..."):
+            optimized_df = run_optimization(df, total_budget, total_customers, min_alloc_perc=0, tier_caps=tier_caps)
         if optimized_df is not None:
-            st.subheader("📈 AI Optimization Strategy")
+            st.subheader("📈 AI Tiered Allocation Strategy")
+            
+            # Add tier information for coloring the bar chart
             fig_bar = px.bar(
                 optimized_df.sort_values('allocated_budget', ascending=False), 
-                x='campaign', y='allocated_budget', color='optimization_potential',
-                color_continuous_scale='Greens', title=f"Diversified Budget Allocation for ${total_budget:,}"
+                x='campaign', y='allocated_budget', color='tier',
+                category_orders={"tier": ["Top", "Middle", "Bottom"]},
+                color_discrete_map={'Top': 'green', 'Middle': 'goldenrod', 'Bottom': 'firebrick'},
+                title=f"Tiered & Diversified Budget Allocation for ${total_budget:,}"
             )
             st.plotly_chart(fig_bar, use_container_width=True)
             
             st.subheader("📋 Optimization Breakdown")
-            st.dataframe(optimized_df[['campaign', 'allocated_budget', 'estimated_reach', 'optimization_potential']], use_container_width=True)
+            st.dataframe(optimized_df[['campaign', 'tier', 'allocated_budget', 'estimated_reach', 'optimization_potential']], use_container_width=True)
             
             st.subheader("💡 AI Strategic Recommendations")
-            top_campaign = optimized_df.iloc[0]
-            total_reach_original = df['historical_reach'].sum()
-            total_reach_optimized = optimized_df['estimated_reach'].sum()
-            reach_increase = ((total_reach_optimized - total_reach_original) / total_reach_original * 100) if total_reach_original > 0 else 100
             st.markdown(f"""
-            - **🎯 Top Priority:** **{top_campaign['campaign']}** still receives the most funding due to its high potential, but its budget is now capped to allow for diversification.
-            - **💸 Diversified Strategy:** The budget is now spread across multiple campaigns, with each receiving at least a minimum allocation. This reduces risk and ensures brand presence across different channels.
-            - **📈 Potential Growth:** The new, more balanced strategy could increase overall customer reach by an estimated **{reach_increase:.2f}%**.
-            - **🤔 Review:** Campaigns receiving only the minimum allocation should be reviewed. Consider improving their creative, targeting, or replacing them in the next planning cycle.
+            - **Tiered Investment:** The budget is now allocated according to performance tiers. **Top-tier** campaigns receive the most significant investment, followed by **middle-tier** campaigns which show promise. **Bottom-tier** campaigns receive minimal funding, primarily for testing or maintenance.
+            - **Balanced Portfolio:** This approach creates a balanced portfolio, maximizing returns from top performers while still nurturing promising campaigns and gathering data on laggards.
+            - **Actionable Insights:** Focus your strategic efforts on moving campaigns from the 'Middle' to the 'Top' tier. Analyze why 'Bottom' tier campaigns are underperforming and decide whether to improve or discontinue them.
             """)
-# --- END OF CORRECTED UI ---
+# --- END OF ADVANCED UI ---
 
 elif analysis_mode == "AI Insights by Generative AI Agent":
     # (This section is unchanged)
     st.header("🤖 AI Insights by Generative AI Agent")
+    # ... (code is identical to previous version) ...
     with st.form(key="ai_form"):
         user_question = st.text_area("Specific Campaign Strategy Question:", "Which campaign has the best performance and why?", height=100)
         submit_button = st.form_submit_button(label="Generate Strategic Insights")
