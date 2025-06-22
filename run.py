@@ -32,14 +32,11 @@ REQUIRED_COLS_FRIENDLY = {
 }
 
 
-# --- Helper Functions ---
-
+# --- Helper Functions (Unchanged) ---
 @st.cache_data
 def load_raw_data(uploaded_file):
-    if uploaded_file.name.endswith('.csv'):
-        return pd.read_csv(uploaded_file)
-    elif uploaded_file.name.endswith(('.xls', '.xlsx')):
-        return pd.read_excel(uploaded_file)
+    if uploaded_file.name.endswith('.csv'): return pd.read_csv(uploaded_file)
+    elif uploaded_file.name.endswith(('.xls', '.xlsx')): return pd.read_excel(uploaded_file)
     return None
 
 def process_dataframe(df):
@@ -48,9 +45,7 @@ def process_dataframe(df):
         if col != 'campaign':
             df_processed[col] = pd.to_numeric(df_processed[col], errors='coerce')
     df_processed.dropna(inplace=True)
-
-    df_processed['efficiency_score'] = (df_processed['historical_reach'] / 
-                                        (df_processed['ad_spend'] * df_processed['engagement_rate'] + 1e-6)).round(4)
+    df_processed['efficiency_score'] = (df_processed['historical_reach'] / (df_processed['ad_spend'] * df_processed['engagement_rate'] + 1e-6)).round(4)
     df_processed['potential_growth'] = (df_processed['repeat_customer_rate'] * df_processed['seasonality_factor']).round(4)
     return df_processed
 
@@ -69,7 +64,7 @@ def run_optimization(df, total_budget, total_customers):
         df_opt['estimated_reach'] = (allocated_budgets * reach_per_dollar).astype(int)
         return df_opt.sort_values(by="optimization_potential", ascending=False)
     else:
-        st.warning("Optimization could not find a solution. This may be due to overly restrictive constraints.")
+        st.warning("Optimization could not find a solution.")
         return None
 
 def ask_gemini(question, df, api_key):
@@ -94,70 +89,62 @@ def ask_gemini(question, df, api_key):
 # --- Sidebar ---
 with st.sidebar:
     st.title("🚀 Intelligent Campaign AI")
-    data_source = st.radio(
-        "Select Data Source",
-        ("Use Sample Data", "Upload Your Own Data"),
-        key="data_source_radio"
-    )
-    analysis_mode = st.selectbox(
-        "Select Analysis Mode",
-        ("Campaign Performance Dashboard", "Optimization Engine", "AI Insights by Generative AI Agent")
-    )
+    data_source = st.radio("Select Data Source", ("Use Sample Data", "Upload Your Own Data"), key="data_source_radio")
+    analysis_mode = st.selectbox("Select Analysis Mode", ("Campaign Performance Dashboard", "Optimization Engine", "AI Insights by Generative AI Agent"))
 
 # --- Main App Logic ---
+if 'df_processed' not in st.session_state: st.session_state.df_processed = None
 
-# Initialize session state
-if 'df_processed' not in st.session_state:
-    st.session_state.df_processed = None
-
-# --- THIS IS THE CORRECTED LOGIC BLOCK ---
 if data_source == "Use Sample Data":
     try:
         script_dir = os.path.dirname(os.path.abspath(__file__))
         file_path = os.path.join(script_dir, 'sample_campaign_data.csv')
         sample_df = pd.read_csv(file_path)
-        
-        # Standardize the column names of the sample data
         sample_df.columns = [col.strip().lower().replace(' ', '_') for col in sample_df.columns]
-        
-        # Check if standardized columns match the required internal names
         if all(col in sample_df.columns for col in REQUIRED_COLS_INTERNAL):
             st.session_state.df_processed = process_dataframe(sample_df)
         else:
             st.error("The sample_campaign_data.csv file has incorrect column headers.")
             st.session_state.df_processed = None
-            
     except Exception as e:
         st.error(f"Could not load or process sample_campaign_data.csv. Error: {e}")
         st.session_state.df_processed = None
-# --- END OF CORRECTED LOGIC BLOCK ---
-
-else: # "Upload Your Own Data"
-    uploaded_file = st.file_uploader(
-        "Upload your campaign data (CSV or Excel)",
-        type=["csv", "xls", "xlsx"]
-    )
+else:
+    uploaded_file = st.file_uploader("Upload your campaign data (CSV or Excel)", type=["csv", "xls", "xlsx"])
     if uploaded_file:
         raw_df = load_raw_data(uploaded_file)
-        
         if raw_df is not None:
-            st.info("File Uploaded. Please map your columns below.")
             with st.expander("Step 2: Map Your Columns", expanded=True):
                 uploaded_cols = raw_df.columns.tolist()
                 col_mapping = {}
-                
                 form = st.form(key="column_mapping_form")
                 cols = form.columns(2)
+                
+                # --- THIS IS THE CORRECTED LOGIC ---
                 for i, (internal_name, friendly_name) in enumerate(REQUIRED_COLS_FRIENDLY.items()):
+                    
+                    # Standardize both for a fair comparison
+                    friendly_name_std = friendly_name.lower().replace(' ', '_')
+                    uploaded_cols_std = {col.lower().replace(' ', '_').strip(): col for col in uploaded_cols}
+                    
+                    # Find the original column name that matches the standardized friendly name
+                    matching_col = uploaded_cols_std.get(friendly_name_std)
+                    
+                    # Find the index of that original column name in the user's list
+                    default_index = None
+                    if matching_col and matching_col in uploaded_cols:
+                        default_index = uploaded_cols.index(matching_col)
+
                     with cols[i % 2]:
                         col_mapping[internal_name] = form.selectbox(
                             f"Select column for '{friendly_name}'",
                             options=uploaded_cols,
+                            index=default_index if default_index is not None else 0,
                             key=f"map_{internal_name}"
                         )
-                
-                submitted = form.form_submit_button("Confirm Mapping and Analyze Data")
+                # --- END OF CORRECTED LOGIC ---
 
+                submitted = form.form_submit_button("Confirm Mapping and Analyze Data")
                 if submitted:
                     if len(set(col_mapping.values())) != len(REQUIRED_COLS_FRIENDLY):
                         st.error("Error: The same uploaded column cannot be used for multiple required fields.")
@@ -169,9 +156,7 @@ else: # "Upload Your Own Data"
                         st.success("Columns mapped successfully! The app is now ready.")
                         st.rerun()
     else:
-        # Clear processed data if no file is uploaded
         st.session_state.df_processed = None
-
 
 # --- Display Content IF Data is Ready ---
 if st.session_state.df_processed is None:
@@ -180,6 +165,7 @@ if st.session_state.df_processed is None:
 
 df = st.session_state.df_processed
 
+# (The rest of the code for the dashboards remains exactly the same)
 if analysis_mode == "Campaign Performance Dashboard":
     st.header("📊 Comprehensive Campaign Performance Dashboard")
     tab1, tab2, tab3, tab4 = st.tabs(["Multi-Dimensional Analysis", "Correlation Insights", "Performance Radar", "Detailed Campaign Metrics"])
@@ -227,7 +213,7 @@ elif analysis_mode == "Optimization Engine":
     if st.button("🚀 Run AI-Powered Optimization", use_container_width=True):
         with st.spinner("Optimizing..."):
             optimized_df = run_optimization(df, total_budget, total_customers)
-        if optimized_df is not None:
+        if optimized_.df is not None:
             st.subheader("📈 AI Optimization Strategy")
             fig_bar = px.bar(optimized_df, x='campaign', y='allocated_budget', color='optimization_potential',
                              color_continuous_scale='Greens', title=f"Optimized Budget Allocation for ${total_budget:,}")
