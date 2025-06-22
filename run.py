@@ -38,41 +38,31 @@ def validate_columns(df):
         return False
     return True
 
+@st.cache_data # Cache only the raw file reading
+def load_raw_data(uploaded_file):
+    """Loads raw data from a file-like object without transformations."""
+    if uploaded_file.name.endswith('.csv'):
+        return pd.read_csv(uploaded_file)
+    elif uploaded_file.name.endswith(('.xls', '.xlsx')):
+        return pd.read_excel(uploaded_file)
+    return None
 
-@st.cache_data
-def load_data(uploaded_file):
-    """Loads data from CSV or Excel file and standardizes it."""
+@st.cache_data # Cache only the raw file reading
+def get_raw_sample_data():
+    """Loads the raw sample CSV data from disk."""
     try:
-        if uploaded_file.name.endswith('.csv'):
-            df = pd.read_csv(uploaded_file)
-        elif uploaded_file.name.endswith(('.xls', '.xlsx')):
-            df = pd.read_excel(uploaded_file)
-        else:
-            st.error("Unsupported file format.")
-            return None
-        
-        df_cleaned = clean_columns(df)
-        if validate_columns(df_cleaned):
-            return df_cleaned
-        return None
-
-    except Exception as e:
-        st.error(f"Error loading file: {e}")
-        return None
-
-@st.cache_data
-def get_sample_data():
-    """Loads and standardizes the predefined sample CSV data."""
-    try:
-        df = pd.read_csv('sample_campaign_data.csv')
-        return clean_columns(df)
+        return pd.read_csv('sample_campaign_data.csv')
     except FileNotFoundError:
-        st.error("`sample_campaign_data.csv` not found. Please make sure it's in the same directory.")
-        return pd.DataFrame()
+        return None
 
-def calculate_metrics(df):
-    """Calculates custom metrics and adds them to the DataFrame."""
-    df_processed = df.copy()
+def process_dataframe(df):
+    """Applies all cleaning and metric calculations to a raw dataframe."""
+    if df is None:
+        return None
+    df_processed = clean_columns(df.copy())
+    if not validate_columns(df_processed):
+        return None
+    # Calculate custom metrics
     df_processed['efficiency_score'] = (df_processed['historical_reach'] / 
                                         (df_processed['ad_spend'] * df_processed['engagement_rate'] + 1e-6)).round(4)
     df_processed['potential_growth'] = (df_processed['repeat_customer_rate'] * df_processed['seasonality_factor']).round(4)
@@ -82,11 +72,11 @@ def run_optimization(df, total_budget, total_customers):
     """Performs linear programming to optimize budget allocation."""
     df_opt = df.copy()
     
-    df_opt['optimization_potential'] = (df_opt['historical_reach'] / df_opt['ad_spend']) * df_opt['engagement_rate'] * df_opt['seasonality_factor']
+    df_opt['optimization_potential'] = (df_opt['historical_reach'] / (df_opt['ad_spend'] + 1e-6)) * df_opt['engagement_rate'] * df_opt['seasonality_factor']
     
     c = -df_opt['optimization_potential'].values
     
-    reach_per_dollar = (df_opt['historical_reach'] / df_opt['ad_spend']).values
+    reach_per_dollar = (df_opt['historical_reach'] / (df_opt['ad_spend'] + 1e-6)).values
     A_ub = [
         np.ones(len(df_opt)),
         -reach_per_dollar
@@ -103,7 +93,7 @@ def run_optimization(df, total_budget, total_customers):
     if result.success:
         allocated_budgets = result.x
         df_opt['allocated_budget'] = allocated_budgets.round(2)
-        df_opt['estimated_reach'] = (allocated_budgets / df_opt['ad_spend'] * df_opt['historical_reach']).astype(int)
+        df_opt['estimated_reach'] = (allocated_budgets * reach_per_dollar).astype(int)
         return df_opt.sort_values(by="optimization_potential", ascending=False)
     else:
         st.warning("Optimization could not find a solution. This may be due to overly restrictive constraints (e.g., budget too low for the target customers). Please adjust the inputs.")
@@ -144,14 +134,18 @@ def ask_gemini(question, df, api_key):
 with st.sidebar:
     st.title("🚀 Intelligent Campaign AI")
     
-    data_source = st.radio(
+    # Use session state to track data source to avoid reloads
+    if 'data_source' not in st.session_state:
+        st.session_state.data_source = "Use Sample Data"
+
+    st.radio(
         "Select Data Source",
         ("Use Sample Data", "Upload Your Own Data"),
-        key="data_source_radio"
+        key="data_source"
     )
 
     uploaded_file = None
-    if data_source == "Upload Your Own Data":
+    if st.session_state.data_source == "Upload Your Own Data":
         uploaded_file = st.file_uploader(
             "Upload CSV or Excel file",
             type=["csv", "xls", "xlsx"],
@@ -163,31 +157,37 @@ with st.sidebar:
         ("Campaign Performance Dashboard", "Optimization Engine", "AI Insights by Generative AI Agent")
     )
 
-
-# --- Data Loading and Processing ---
+# --- Data Loading and Processing Logic ---
+# This block runs only when the source changes, not on every widget interaction.
 if 'df' not in st.session_state:
     st.session_state.df = None
 
-if data_source == "Upload Your Own Data" and uploaded_file:
-    df_loaded = load_data(uploaded_file)
-    if df_loaded is not None:
-        st.session_state.df = calculate_metrics(df_loaded)
-elif data_source == "Use Sample Data":
-    st.session_state.df = calculate_metrics(get_sample_data())
-
+if st.session_state.data_source == "Upload Your Own Data":
+    if uploaded_file is not None:
+        raw_df = load_raw_data(uploaded_file)
+        st.session_state.df = process_dataframe(raw_df)
+    else:
+        st.session_state.df = None # Clear df if no file is uploaded
+else: # "Use Sample Data"
+    raw_sample_df = get_raw_sample_data()
+    st.session_state.df = process_dataframe(raw_sample_df)
 
 # --- Main App Interface ---
 if st.session_state.df is None:
-    if data_source != "Upload Your Own Data" or not uploaded_file:
-        st.info("Please upload a data file or select 'Use Sample Data' to begin.")
+    if st.session_state.data_source == "Upload Your Own Data":
+         st.info("Please upload a data file to begin.")
+    else: # Error case for missing sample data
+         st.error("`sample_campaign_data.csv` not found. Please make sure it's in the same directory.")
     st.stop()
 
 df = st.session_state.df
 
+# (The rest of the main app interface code remains exactly the same as the previous robust version)
+# ... (omitted for brevity, paste the main interface code from the previous answer here) ...
 if analysis_mode == "Campaign Performance Dashboard":
     st.header("📊 Comprehensive Campaign Performance Dashboard")
     
-    if data_source == "Upload Your Own Data" and uploaded_file:
+    if st.session_state.data_source == "Upload Your Own Data" and uploaded_file:
         st.success(f"Dataset with {len(df)} campaigns successfully loaded!")
         st.dataframe(df.head())
 
