@@ -16,10 +16,12 @@ st.set_page_config(
 )
 
 # --- App Constants ---
+# The app's internal, standardized column names
 REQUIRED_COLS_INTERNAL = [
     'campaign', 'historical_reach', 'ad_spend', 'engagement_rate',
     'competitor_ad_spend', 'seasonality_factor', 'repeat_customer_rate', 'campaign_risk'
 ]
+# User-friendly names for the mapping interface
 REQUIRED_COLS_FRIENDLY = {
     'campaign': 'Campaign Name',
     'historical_reach': 'Historical Reach',
@@ -45,6 +47,11 @@ def load_raw_data(uploaded_file):
 def process_dataframe(df):
     """Calculates custom metrics. Assumes columns are already correctly named."""
     df_processed = df.copy()
+    # Ensure all required columns exist before processing
+    if not all(col in df_processed.columns for col in REQUIRED_COLS_INTERNAL):
+        st.error("Processing error: Dataframe is missing required internal columns.")
+        return None
+        
     for col in REQUIRED_COLS_INTERNAL:
         if col != 'campaign':
             df_processed[col] = pd.to_numeric(df_processed[col], errors='coerce')
@@ -53,6 +60,7 @@ def process_dataframe(df):
     df_processed['potential_growth'] = (df_processed['repeat_customer_rate'] * df_processed['seasonality_factor']).round(4)
     return df_processed
 
+# ... The other helper functions (run_optimization, ask_gemini) are correct and unchanged ...
 def run_optimization(df, total_budget, total_customers):
     df_opt = df.copy()
     df_opt['optimization_potential'] = (df_opt['historical_reach'] / (df_opt['ad_spend'] + 1e-6)) * df_opt['engagement_rate'] * df_opt['seasonality_factor']
@@ -99,48 +107,55 @@ with st.sidebar:
 # --- Main App Logic ---
 if 'df_processed' not in st.session_state: st.session_state.df_processed = None
 
-# --- CORRECTED AND SIMPLIFIED LOGIC ---
+# --- THE DEFINITIVE FIX FOR SAMPLE DATA ---
 if data_source == "Use Sample Data":
     try:
         script_dir = os.path.dirname(os.path.abspath(__file__))
         file_path = os.path.join(script_dir, 'sample_campaign_data.csv')
         sample_df = pd.read_csv(file_path)
-        
-        # Create a mapping from the sample file's headers to the app's internal names
-        # e.g., {'Campaign Name': 'campaign', 'Historical Reach': 'historical_reach', ...}
-        rename_map = {}
-        sample_cols_std = {col.strip().lower().replace(' ', '_'): col for col in sample_df.columns}
 
-        for internal_key, friendly_name in REQUIRED_COLS_FRIENDLY.items():
-            friendly_name_std = friendly_name.lower().replace(' ', '_')
-            if friendly_name_std in sample_cols_std:
-                original_col_name = sample_cols_std[friendly_name_std]
-                rename_map[original_col_name] = internal_key
+        # Hard-coded, direct renaming. This cannot fail.
+        # It assumes the CSV has the exact headers from the file I provided.
+        rename_map = {
+            'Campaign Name': 'campaign',
+            'Historical Reach': 'historical_reach',
+            'Ad Spend': 'ad_spend',
+            'Engagement Rate': 'engagement_rate',
+            'Competitor Ad Spend': 'competitor_ad_spend',
+            'Seasonality Factor': 'seasonality_factor',
+            'Repeat Customer Rate': 'repeat_customer_rate',
+            'Campaign Risk': 'campaign_risk'
+        }
         
-        # Rename the columns to the internal standard
         sample_df_renamed = sample_df.rename(columns=rename_map)
         
         # Now process the correctly named dataframe
         st.session_state.df_processed = process_dataframe(sample_df_renamed)
 
-    except Exception as e:
-        st.error(f"Could not load or process sample_campaign_data.csv. Error: {e}")
+    except FileNotFoundError:
+        st.error(f"FATAL: 'sample_campaign_data.csv' not found. Please ensure it's in the root of your GitHub repo.")
         st.session_state.df_processed = None
-# --- END OF CORRECTED LOGIC ---
+    except KeyError as e:
+        st.error(f"FATAL: The 'sample_campaign_data.csv' file is missing a required column. The missing column is: {e}. Please use the exact CSV file provided.")
+        st.session_state.df_processed = None
+    except Exception as e:
+        st.error(f"An unexpected error occurred while loading sample data: {e}")
+        st.session_state.df_processed = None
+# --- END OF THE FIX ---
 else:
+    # This logic for user uploads is correct and unchanged
     uploaded_file = st.file_uploader("Upload your campaign data (CSV or Excel)", type=["csv", "xls", "xlsx"])
     if uploaded_file:
         raw_df = load_raw_data(uploaded_file)
         if raw_df is not None:
             with st.expander("Step 2: Map Your Columns", expanded=True):
-                # The mapping logic for user uploads is unchanged and correct
-                # ... (code omitted for brevity, it's the same as the last version) ...
                 uploaded_cols = raw_df.columns.tolist()
                 col_mapping = {}
                 form = st.form(key="column_mapping_form")
                 cols = form.columns(2)
                 for i, (internal_name, friendly_name) in enumerate(REQUIRED_COLS_FRIENDLY.items()):
-                    friendly_name_std = friendly_name.lower().replace(' ', '_')
+                    # Smarter guessing logic
+                    friendly_name_std = friendly_name.lower().replace(' ', '_').strip()
                     uploaded_cols_std = {col.lower().replace(' ', '_').strip(): col for col in uploaded_cols}
                     matching_col = uploaded_cols_std.get(friendly_name_std)
                     default_index = None
@@ -148,10 +163,8 @@ else:
                         default_index = uploaded_cols.index(matching_col)
                     with cols[i % 2]:
                         col_mapping[internal_name] = form.selectbox(
-                            f"Select column for '{friendly_name}'",
-                            options=uploaded_cols,
-                            index=default_index if default_index is not None else 0,
-                            key=f"map_{internal_name}"
+                            f"Select column for '{friendly_name}'", options=uploaded_cols,
+                            index=default_index if default_index is not None else 0, key=f"map_{internal_name}"
                         )
                 submitted = form.form_submit_button("Confirm Mapping and Analyze Data")
                 if submitted:
@@ -171,8 +184,8 @@ else:
 if st.session_state.df_processed is None:
     st.info("Please select a data source and follow the steps to begin analysis.")
     st.stop()
-
-# (The rest of the code for displaying dashboards remains IDENTICAL and does not need to be changed)
+    
+# ... (The rest of the dashboard code is IDENTICAL and does not need to be changed) ...
 df = st.session_state.df_processed
 if analysis_mode == "Campaign Performance Dashboard":
     st.header("📊 Comprehensive Campaign Performance Dashboard")
