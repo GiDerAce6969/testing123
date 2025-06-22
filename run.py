@@ -15,7 +15,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- REQUIRED COLUMNS FOR THE APP ---
+# --- App Constants ---
 REQUIRED_COLS_INTERNAL = [
     'campaign', 'historical_reach', 'ad_spend', 'engagement_rate',
     'competitor_ad_spend', 'seasonality_factor', 'repeat_customer_rate', 'campaign_risk'
@@ -31,15 +31,19 @@ REQUIRED_COLS_FRIENDLY = {
     'campaign_risk': 'Campaign Risk'
 }
 
-
-# --- Helper Functions (Unchanged) ---
+# --- Helper Functions ---
 @st.cache_data
 def load_raw_data(uploaded_file):
-    if uploaded_file.name.endswith('.csv'): return pd.read_csv(uploaded_file)
-    elif uploaded_file.name.endswith(('.xls', '.xlsx')): return pd.read_excel(uploaded_file)
+    """Loads raw data from a file-like object without transformations."""
+    try:
+        if uploaded_file.name.endswith('.csv'): return pd.read_csv(uploaded_file)
+        elif uploaded_file.name.endswith(('.xls', '.xlsx')): return pd.read_excel(uploaded_file)
+    except Exception as e:
+        st.error(f"Error reading file: {e}")
     return None
 
 def process_dataframe(df):
+    """Calculates custom metrics. Assumes columns are already correctly named."""
     df_processed = df.copy()
     for col in REQUIRED_COLS_INTERNAL:
         if col != 'campaign':
@@ -95,46 +99,53 @@ with st.sidebar:
 # --- Main App Logic ---
 if 'df_processed' not in st.session_state: st.session_state.df_processed = None
 
+# --- CORRECTED AND SIMPLIFIED LOGIC ---
 if data_source == "Use Sample Data":
     try:
         script_dir = os.path.dirname(os.path.abspath(__file__))
         file_path = os.path.join(script_dir, 'sample_campaign_data.csv')
         sample_df = pd.read_csv(file_path)
-        sample_df.columns = [col.strip().lower().replace(' ', '_') for col in sample_df.columns]
-        if all(col in sample_df.columns for col in REQUIRED_COLS_INTERNAL):
-            st.session_state.df_processed = process_dataframe(sample_df)
-        else:
-            st.error("The sample_campaign_data.csv file has incorrect column headers.")
-            st.session_state.df_processed = None
+        
+        # Create a mapping from the sample file's headers to the app's internal names
+        # e.g., {'Campaign Name': 'campaign', 'Historical Reach': 'historical_reach', ...}
+        rename_map = {}
+        sample_cols_std = {col.strip().lower().replace(' ', '_'): col for col in sample_df.columns}
+
+        for internal_key, friendly_name in REQUIRED_COLS_FRIENDLY.items():
+            friendly_name_std = friendly_name.lower().replace(' ', '_')
+            if friendly_name_std in sample_cols_std:
+                original_col_name = sample_cols_std[friendly_name_std]
+                rename_map[original_col_name] = internal_key
+        
+        # Rename the columns to the internal standard
+        sample_df_renamed = sample_df.rename(columns=rename_map)
+        
+        # Now process the correctly named dataframe
+        st.session_state.df_processed = process_dataframe(sample_df_renamed)
+
     except Exception as e:
         st.error(f"Could not load or process sample_campaign_data.csv. Error: {e}")
         st.session_state.df_processed = None
+# --- END OF CORRECTED LOGIC ---
 else:
     uploaded_file = st.file_uploader("Upload your campaign data (CSV or Excel)", type=["csv", "xls", "xlsx"])
     if uploaded_file:
         raw_df = load_raw_data(uploaded_file)
         if raw_df is not None:
             with st.expander("Step 2: Map Your Columns", expanded=True):
+                # The mapping logic for user uploads is unchanged and correct
+                # ... (code omitted for brevity, it's the same as the last version) ...
                 uploaded_cols = raw_df.columns.tolist()
                 col_mapping = {}
                 form = st.form(key="column_mapping_form")
                 cols = form.columns(2)
-                
-                # --- THIS IS THE CORRECTED LOGIC ---
                 for i, (internal_name, friendly_name) in enumerate(REQUIRED_COLS_FRIENDLY.items()):
-                    
-                    # Standardize both for a fair comparison
                     friendly_name_std = friendly_name.lower().replace(' ', '_')
                     uploaded_cols_std = {col.lower().replace(' ', '_').strip(): col for col in uploaded_cols}
-                    
-                    # Find the original column name that matches the standardized friendly name
                     matching_col = uploaded_cols_std.get(friendly_name_std)
-                    
-                    # Find the index of that original column name in the user's list
                     default_index = None
                     if matching_col and matching_col in uploaded_cols:
                         default_index = uploaded_cols.index(matching_col)
-
                     with cols[i % 2]:
                         col_mapping[internal_name] = form.selectbox(
                             f"Select column for '{friendly_name}'",
@@ -142,8 +153,6 @@ else:
                             index=default_index if default_index is not None else 0,
                             key=f"map_{internal_name}"
                         )
-                # --- END OF CORRECTED LOGIC ---
-
                 submitted = form.form_submit_button("Confirm Mapping and Analyze Data")
                 if submitted:
                     if len(set(col_mapping.values())) != len(REQUIRED_COLS_FRIENDLY):
@@ -163,9 +172,8 @@ if st.session_state.df_processed is None:
     st.info("Please select a data source and follow the steps to begin analysis.")
     st.stop()
 
+# (The rest of the code for displaying dashboards remains IDENTICAL and does not need to be changed)
 df = st.session_state.df_processed
-
-# (The rest of the code for the dashboards remains exactly the same)
 if analysis_mode == "Campaign Performance Dashboard":
     st.header("📊 Comprehensive Campaign Performance Dashboard")
     tab1, tab2, tab3, tab4 = st.tabs(["Multi-Dimensional Analysis", "Correlation Insights", "Performance Radar", "Detailed Campaign Metrics"])
@@ -202,7 +210,6 @@ if analysis_mode == "Campaign Performance Dashboard":
         st.subheader("Detailed Campaign Metrics & Growth Potential")
         st.dataframe(df.style.highlight_max(subset=['efficiency_score', 'potential_growth'], color='lightgreen', axis=0), use_container_width=True)
         st.download_button("Export Data as CSV", df.to_csv(index=False).encode('utf-8'), "campaign_metrics.csv", "text/csv")
-
 elif analysis_mode == "Optimization Engine":
     st.header("⚙️ AI-Powered Optimization Engine")
     col1, col2 = st.columns(2)
@@ -213,7 +220,7 @@ elif analysis_mode == "Optimization Engine":
     if st.button("🚀 Run AI-Powered Optimization", use_container_width=True):
         with st.spinner("Optimizing..."):
             optimized_df = run_optimization(df, total_budget, total_customers)
-        if optimized_.df is not None:
+        if optimized_df is not None:
             st.subheader("📈 AI Optimization Strategy")
             fig_bar = px.bar(optimized_df, x='campaign', y='allocated_budget', color='optimization_potential',
                              color_continuous_scale='Greens', title=f"Optimized Budget Allocation for ${total_budget:,}")
@@ -231,7 +238,6 @@ elif analysis_mode == "Optimization Engine":
             - **👀 Top Performers:** **'{optimized_df.iloc[0]['campaign']}'** and **'{optimized_df.iloc[1]['campaign']}'** show the most promise.
             - **🤔 Review:** Consider adjusting strategies for campaigns with low allocated budgets.
             """)
-
 elif analysis_mode == "AI Insights by Generative AI Agent":
     st.header("🤖 AI Insights by Generative AI Agent")
     api_key = st.text_input("Enter your Google Gemini API Key:", type="password", help="Get your key from Google AI Studio.")
