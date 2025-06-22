@@ -38,22 +38,21 @@ def validate_columns(df):
         return False
     return True
 
-@st.cache_data # Cache only the raw file reading
-def load_raw_data(uploaded_file):
-    """Loads raw data from a file-like object without transformations."""
-    if uploaded_file.name.endswith('.csv'):
-        return pd.read_csv(uploaded_file)
-    elif uploaded_file.name.endswith(('.xls', '.xlsx')):
-        return pd.read_excel(uploaded_file)
-    return None
-
-@st.cache_data # Cache only the raw file reading
+@st.cache_data 
 def get_raw_sample_data():
-    """Loads the raw sample CSV data from disk."""
+    """Loads the raw sample CSV data from disk using a robust path."""
     try:
-        return pd.read_csv('sample_campaign_data.csv')
+        # Get the absolute path of the directory where the script is located
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        # Join this directory path with the filename
+        file_path = os.path.join(script_dir, 'sample_campaign_data.csv')
+        # Read the CSV from the constructed absolute path
+        return pd.read_csv(file_path)
     except FileNotFoundError:
+        # This error message is now much more reliable
+        st.error(f"FATAL: 'sample_campaign_data.csv' not found in the GitHub repository next to the script. Please ensure it has been uploaded correctly.")
         return None
+# --- END OF CORRECTED FUNCTION ---
 
 def process_dataframe(df):
     """Applies all cleaning and metric calculations to a raw dataframe."""
@@ -67,7 +66,7 @@ def process_dataframe(df):
                                         (df_processed['ad_spend'] * df_processed['engagement_rate'] + 1e-6)).round(4)
     df_processed['potential_growth'] = (df_processed['repeat_customer_rate'] * df_processed['seasonality_factor']).round(4)
     return df_processed
-
+    
 def run_optimization(df, total_budget, total_customers):
     """Performs linear programming to optimize budget allocation."""
     df_opt = df.copy()
