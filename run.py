@@ -16,12 +16,10 @@ st.set_page_config(
 )
 
 # --- REQUIRED COLUMNS FOR THE APP ---
-# These are the internal names the app will use after mapping.
 REQUIRED_COLS_INTERNAL = [
     'campaign', 'historical_reach', 'ad_spend', 'engagement_rate',
     'competitor_ad_spend', 'seasonality_factor', 'repeat_customer_rate', 'campaign_risk'
 ]
-# These are the user-friendly names shown in the UI.
 REQUIRED_COLS_FRIENDLY = {
     'campaign': 'Campaign Name',
     'historical_reach': 'Historical Reach',
@@ -34,11 +32,10 @@ REQUIRED_COLS_FRIENDLY = {
 }
 
 
-# --- Helper Functions (No changes here) ---
+# --- Helper Functions ---
 
 @st.cache_data
 def load_raw_data(uploaded_file):
-    """Loads raw data from a file-like object without transformations."""
     if uploaded_file.name.endswith('.csv'):
         return pd.read_csv(uploaded_file)
     elif uploaded_file.name.endswith(('.xls', '.xlsx')):
@@ -46,11 +43,10 @@ def load_raw_data(uploaded_file):
     return None
 
 def process_dataframe(df):
-    """Calculates custom metrics. Assumes columns are already correctly named."""
     df_processed = df.copy()
-    # Ensure numeric types for calculations
-    for col in ['historical_reach', 'ad_spend', 'engagement_rate', 'competitor_ad_spend', 'seasonality_factor', 'repeat_customer_rate', 'campaign_risk']:
-        df_processed[col] = pd.to_numeric(df_processed[col], errors='coerce')
+    for col in REQUIRED_COLS_INTERNAL:
+        if col != 'campaign':
+            df_processed[col] = pd.to_numeric(df_processed[col], errors='coerce')
     df_processed.dropna(inplace=True)
 
     df_processed['efficiency_score'] = (df_processed['historical_reach'] / 
@@ -58,7 +54,6 @@ def process_dataframe(df):
     df_processed['potential_growth'] = (df_processed['repeat_customer_rate'] * df_processed['seasonality_factor']).round(4)
     return df_processed
 
-# ... (run_optimization and ask_gemini functions are unchanged) ...
 def run_optimization(df, total_budget, total_customers):
     df_opt = df.copy()
     df_opt['optimization_potential'] = (df_opt['historical_reach'] / (df_opt['ad_spend'] + 1e-6)) * df_opt['engagement_rate'] * df_opt['seasonality_factor']
@@ -74,7 +69,7 @@ def run_optimization(df, total_budget, total_customers):
         df_opt['estimated_reach'] = (allocated_budgets * reach_per_dollar).astype(int)
         return df_opt.sort_values(by="optimization_potential", ascending=False)
     else:
-        st.warning("Optimization could not find a solution. This may be due to overly restrictive constraints (e.g., budget too low for the target customers). Please adjust the inputs.")
+        st.warning("Optimization could not find a solution. This may be due to overly restrictive constraints.")
         return None
 
 def ask_gemini(question, df, api_key):
@@ -90,12 +85,11 @@ def ask_gemini(question, df, api_key):
         {df_string}
         --- END OF DATA ---
         USER'S QUESTION: "{question}"
-        Please provide a clear, concise, and actionable answer based on the data. If the user asks for a table, format your response accordingly."""
+        Please provide a clear, concise, and actionable answer based on the data."""
         response = model.generate_content(prompt)
         return response.text
     except Exception as e:
-        return f"An error occurred with the Gemini API: {e}. Please check your API key and try again."
-
+        return f"An error occurred with the Gemini API: {e}."
 
 # --- Sidebar ---
 with st.sidebar:
@@ -115,21 +109,28 @@ with st.sidebar:
 # Initialize session state
 if 'df_processed' not in st.session_state:
     st.session_state.df_processed = None
-if 'raw_df' not in st.session_state:
-    st.session_state.raw_df = None
 
+# --- THIS IS THE CORRECTED LOGIC BLOCK ---
 if data_source == "Use Sample Data":
-    # Special handling for sample data to auto-process
     try:
         script_dir = os.path.dirname(os.path.abspath(__file__))
         file_path = os.path.join(script_dir, 'sample_campaign_data.csv')
         sample_df = pd.read_csv(file_path)
-        # Rename sample columns to the internal standard
+        
+        # Standardize the column names of the sample data
         sample_df.columns = [col.strip().lower().replace(' ', '_') for col in sample_df.columns]
-        st.session_state.df_processed = process_dataframe(sample_df)
+        
+        # Check if standardized columns match the required internal names
+        if all(col in sample_df.columns for col in REQUIRED_COLS_INTERNAL):
+            st.session_state.df_processed = process_dataframe(sample_df)
+        else:
+            st.error("The sample_campaign_data.csv file has incorrect column headers.")
+            st.session_state.df_processed = None
+            
     except Exception as e:
         st.error(f"Could not load or process sample_campaign_data.csv. Error: {e}")
         st.session_state.df_processed = None
+# --- END OF CORRECTED LOGIC BLOCK ---
 
 else: # "Upload Your Own Data"
     uploaded_file = st.file_uploader(
@@ -137,63 +138,50 @@ else: # "Upload Your Own Data"
         type=["csv", "xls", "xlsx"]
     )
     if uploaded_file:
-        st.session_state.raw_df = load_raw_data(uploaded_file)
+        raw_df = load_raw_data(uploaded_file)
         
-        st.info("File Uploaded. Please map your columns below.")
-        
-        with st.expander("Step 2: Map Your Columns", expanded=True):
-            if st.session_state.raw_df is not None:
-                uploaded_cols = st.session_state.raw_df.columns.tolist()
+        if raw_df is not None:
+            st.info("File Uploaded. Please map your columns below.")
+            with st.expander("Step 2: Map Your Columns", expanded=True):
+                uploaded_cols = raw_df.columns.tolist()
                 col_mapping = {}
                 
                 form = st.form(key="column_mapping_form")
                 cols = form.columns(2)
                 for i, (internal_name, friendly_name) in enumerate(REQUIRED_COLS_FRIENDLY.items()):
-                    # Intelligent guessing for the default selection
-                    # Tries to find a column in the uploaded file that matches the required name (case-insensitive)
-                    default_index = None
-                    for j, u_col in enumerate(uploaded_cols):
-                        if friendly_name.lower().replace(' ', '_') == u_col.lower().replace(' ', '_'):
-                            default_index = j
-                            break
-                    
                     with cols[i % 2]:
                         col_mapping[internal_name] = form.selectbox(
                             f"Select column for '{friendly_name}'",
                             options=uploaded_cols,
-                            index=default_index if default_index is not None else 0,
                             key=f"map_{internal_name}"
                         )
                 
                 submitted = form.form_submit_button("Confirm Mapping and Analyze Data")
 
                 if submitted:
-                    # Check for duplicate mappings
                     if len(set(col_mapping.values())) != len(REQUIRED_COLS_FRIENDLY):
-                        st.error("Error: The same uploaded column cannot be used for multiple required fields. Please check your mapping.")
+                        st.error("Error: The same uploaded column cannot be used for multiple required fields.")
                     else:
-                        # Create the reverse mapping for renaming
                         rename_dict = {v: k for k, v in col_mapping.items()}
-                        df_renamed = st.session_state.raw_df.rename(columns=rename_dict)
-                        
-                        # Keep only the columns we need
+                        df_renamed = raw_df.rename(columns=rename_dict)
                         df_final_raw = df_renamed[REQUIRED_COLS_INTERNAL]
-                        
                         st.session_state.df_processed = process_dataframe(df_final_raw)
                         st.success("Columns mapped successfully! The app is now ready.")
-                        st.rerun() # Rerun to hide the mapping form and show the dashboard
+                        st.rerun()
+    else:
+        # Clear processed data if no file is uploaded
+        st.session_state.df_processed = None
+
 
 # --- Display Content IF Data is Ready ---
 if st.session_state.df_processed is None:
     st.info("Please select a data source and follow the steps to begin analysis.")
     st.stop()
 
-# From here on, use st.session_state.df_processed as 'df'
 df = st.session_state.df_processed
 
 if analysis_mode == "Campaign Performance Dashboard":
     st.header("📊 Comprehensive Campaign Performance Dashboard")
-    # The rest of the dashboard code is unchanged, just ensure it uses 'df'
     tab1, tab2, tab3, tab4 = st.tabs(["Multi-Dimensional Analysis", "Correlation Insights", "Performance Radar", "Detailed Campaign Metrics"])
     with tab1:
         st.subheader("Campaign Performance Landscape")
@@ -210,7 +198,6 @@ if analysis_mode == "Campaign Performance Dashboard":
         st.subheader("Campaign Performance Radar")
         campaigns_to_compare = st.multiselect("Select campaigns to compare:", options=df['campaign'].tolist(), default=df['campaign'].tolist()[:5])
         if campaigns_to_compare:
-            # ... (radar chart logic remains the same)
             df_radar = df[df['campaign'].isin(campaigns_to_compare)]
             metrics_to_plot = ['ad_spend', 'historical_reach', 'engagement_rate', 'repeat_customer_rate']
             df_normalized = df_radar.copy()
@@ -232,7 +219,6 @@ if analysis_mode == "Campaign Performance Dashboard":
 
 elif analysis_mode == "Optimization Engine":
     st.header("⚙️ AI-Powered Optimization Engine")
-    # ... (optimization engine logic remains the same)
     col1, col2 = st.columns(2)
     with col1:
         total_budget = st.slider("Total Marketing Budget ($)", 50000, 1000000, 200000, 10000)
@@ -262,7 +248,6 @@ elif analysis_mode == "Optimization Engine":
 
 elif analysis_mode == "AI Insights by Generative AI Agent":
     st.header("🤖 AI Insights by Generative AI Agent")
-    # ... (AI insights logic remains the same)
     api_key = st.text_input("Enter your Google Gemini API Key:", type="password", help="Get your key from Google AI Studio.")
     with st.form(key="ai_form"):
         user_question = st.text_area("Specific Campaign Strategy Question:", "Which campaign has the best performance and why?", height=100)
