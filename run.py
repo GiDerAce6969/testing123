@@ -6,6 +6,7 @@ import plotly.graph_objects as go
 from scipy.optimize import linprog
 import google.generativeai as genai
 import io
+import os # <--- THIS IS THE FIX
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -38,7 +39,16 @@ def validate_columns(df):
         return False
     return True
 
-@st.cache_data 
+@st.cache_data
+def load_raw_data(uploaded_file):
+    """Loads raw data from a file-like object without transformations."""
+    if uploaded_file.name.endswith('.csv'):
+        return pd.read_csv(uploaded_file)
+    elif uploaded_file.name.endswith(('.xls', '.xlsx')):
+        return pd.read_excel(uploaded_file)
+    return None
+
+@st.cache_data
 def get_raw_sample_data():
     """Loads the raw sample CSV data from disk using a robust path."""
     try:
@@ -52,7 +62,6 @@ def get_raw_sample_data():
         # This error message is now much more reliable
         st.error(f"FATAL: 'sample_campaign_data.csv' not found in the GitHub repository next to the script. Please ensure it has been uploaded correctly.")
         return None
-# --- END OF CORRECTED FUNCTION ---
 
 def process_dataframe(df):
     """Applies all cleaning and metric calculations to a raw dataframe."""
@@ -66,7 +75,7 @@ def process_dataframe(df):
                                         (df_processed['ad_spend'] * df_processed['engagement_rate'] + 1e-6)).round(4)
     df_processed['potential_growth'] = (df_processed['repeat_customer_rate'] * df_processed['seasonality_factor']).round(4)
     return df_processed
-    
+
 def run_optimization(df, total_budget, total_customers):
     """Performs linear programming to optimize budget allocation."""
     df_opt = df.copy()
@@ -133,7 +142,6 @@ def ask_gemini(question, df, api_key):
 with st.sidebar:
     st.title("🚀 Intelligent Campaign AI")
     
-    # Use session state to track data source to avoid reloads
     if 'data_source' not in st.session_state:
         st.session_state.data_source = "Use Sample Data"
 
@@ -157,7 +165,6 @@ with st.sidebar:
     )
 
 # --- Data Loading and Processing Logic ---
-# This block runs only when the source changes, not on every widget interaction.
 if 'df' not in st.session_state:
     st.session_state.df = None
 
@@ -166,8 +173,8 @@ if st.session_state.data_source == "Upload Your Own Data":
         raw_df = load_raw_data(uploaded_file)
         st.session_state.df = process_dataframe(raw_df)
     else:
-        st.session_state.df = None # Clear df if no file is uploaded
-else: # "Use Sample Data"
+        st.session_state.df = None
+else:
     raw_sample_df = get_raw_sample_data()
     st.session_state.df = process_dataframe(raw_sample_df)
 
@@ -175,14 +182,10 @@ else: # "Use Sample Data"
 if st.session_state.df is None:
     if st.session_state.data_source == "Upload Your Own Data":
          st.info("Please upload a data file to begin.")
-    else: # Error case for missing sample data
-         st.error("`sample_campaign_data.csv` not found. Please make sure it's in the same directory.")
     st.stop()
 
 df = st.session_state.df
 
-# (The rest of the main app interface code remains exactly the same as the previous robust version)
-# ... (omitted for brevity, paste the main interface code from the previous answer here) ...
 if analysis_mode == "Campaign Performance Dashboard":
     st.header("📊 Comprehensive Campaign Performance Dashboard")
     
@@ -232,7 +235,7 @@ if analysis_mode == "Campaign Performance Dashboard":
                 if max_val - min_val > 0:
                     df_normalized[col] = (df_radar[col] - min_val) / (max_val - min_val)
                 else:
-                    df_normalized[col] = 0.5  # Assign a neutral value if all values are the same
+                    df_normalized[col] = 0.5
             
             fig_radar = go.Figure()
             for _, row in df_normalized.iterrows():
